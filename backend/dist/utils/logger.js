@@ -11,11 +11,9 @@ const logger = winston_1.default.createLogger({
     transports: [
         new winston_1.default.transports.File({ filename: "error.log", level: "error" }),
         new winston_1.default.transports.File({ filename: "combined.log" }),
+        new winston_1.default.transports.Console({
+            format: winston_1.default.format.combine(winston_1.default.format.colorize(), winston_1.default.format.simple()),
+        }),
     ],
 });
 exports.logger = logger;
-if (process.env.NODE_ENV !== "production") {
-    logger.add(new winston_1.default.transports.Console({
-        format: winston_1.default.format.combine(winston_1.default.format.colorize(), winston_1.default.format.simple()),
-    }));
-}

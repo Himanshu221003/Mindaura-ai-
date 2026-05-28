@@ -1,11 +1,17 @@
 "use strict";
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.functions = exports.generateActivityRecommendations = exports.analyzeTherapySession = exports.processChatMessage = void 0;
 const client_1 = require("./client");
-const generative_ai_1 = require("@google/generative-ai");
+const openai_1 = __importDefault(require("openai"));
 const logger_1 = require("../utils/logger");
-// Initialize Gemini
-const genAI = new generative_ai_1.GoogleGenerativeAI(process.env.GEMINI_API_KEY || "AIzaSyBCBz3wQu9Jjd_icCDZf-17CUO_O8IynwI");
+// Initialize Groq via OpenAI client
+const openai = new openai_1.default({
+    apiKey: process.env.GROQ_API_KEY || "",
+    baseURL: "https://api.groq.com/openai/v1",
+});
 // Function to handle chat message processing
 exports.processChatMessage = client_1.inngest.createFunction({
     id: "process-chat-message",
@@ -26,10 +32,9 @@ exports.processChatMessage = client_1.inngest.createFunction({
             message,
             historyLength: history?.length,
         });
-        // Analyze the message using Gemini
+        // Analyze the message using Groq
         const analysis = await step.run("analyze-message", async () => {
             try {
-                const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
                 const prompt = `Analyze this therapy message and provide insights. Return ONLY a valid JSON object with no markdown formatting or additional text.
           Message: ${message}
           Context: ${JSON.stringify({ memory, goals })}
@@ -42,10 +47,13 @@ exports.processChatMessage = client_1.inngest.createFunction({
             "recommendedApproach": "string",
             "progressIndicators": ["string"]
           }`;
-                const result = await model.generateContent(prompt);
-                const response = await result.response;
-                const text = response.text().trim();
-                logger_1.logger.info("Received analysis from Gemini:", { text });
+                const completion = await openai.chat.completions.create({
+                    messages: [{ role: "user", content: prompt }],
+                    model: "llama-3.3-70b-versatile",
+                    response_format: { type: "json_object" },
+                });
+                const text = completion.choices[0]?.message?.content || "{}";
+                logger_1.logger.info("Received analysis from Groq:", { text });
                 // Clean the response text to ensure it's valid JSON
                 const cleanText = text.replace(/```json\n|\n```/g, "").trim();
                 const parsedAnalysis = JSON.parse(cleanText);
@@ -89,7 +97,6 @@ exports.processChatMessage = client_1.inngest.createFunction({
         // Generate therapeutic response
         const response = await step.run("generate-response", async () => {
             try {
-                const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
                 const prompt = `${systemPrompt}
           
           Based on the following context, generate a therapeutic response:
@@ -104,8 +111,11 @@ exports.processChatMessage = client_1.inngest.createFunction({
           3. Shows empathy and understanding
           4. Maintains professional boundaries
           5. Considers safety and well-being`;
-                const result = await model.generateContent(prompt);
-                const responseText = result.response.text().trim();
+                const completion = await openai.chat.completions.create({
+                    messages: [{ role: "user", content: prompt }],
+                    model: "llama-3.3-70b-versatile",
+                });
+                const responseText = completion.choices[0]?.message?.content?.trim() || "";
                 logger_1.logger.info("Generated response:", { responseText });
                 return responseText;
             }
@@ -148,9 +158,8 @@ exports.analyzeTherapySession = client_1.inngest.createFunction({ id: "analyze-t
         const sessionContent = await step.run("get-session-content", async () => {
             return event.data.notes || event.data.transcript;
         });
-        // Analyze the session using Gemini
-        const analysis = await step.run("analyze-with-gemini", async () => {
-            const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
+        // Analyze the session using Groq
+        const analysis = await step.run("analyze-with-groq", async () => {
             const prompt = `Analyze this therapy session and provide insights:
         Session Content: ${sessionContent}
         
@@ -161,11 +170,24 @@ exports.analyzeTherapySession = client_1.inngest.createFunction({ id: "analyze-t
         4. Recommendations for follow-up
         5. Progress indicators
         
-        Format the response as a JSON object.`;
-            const result = await model.generateContent(prompt);
-            const response = await result.response;
-            const text = response.text();
-            return JSON.parse(text);
+        Format the response as a JSON object.
+        
+        Required JSON structure:
+        {
+          "keyThemes": ["string"],
+          "emotionalStateAnalysis": "string",
+          "areasOfConcern": ["string"],
+          "recommendations": ["string"],
+          "progressIndicators": ["string"]
+        }`;
+            const completion = await openai.chat.completions.create({
+                messages: [{ role: "user", content: prompt }],
+                model: "llama-3.3-70b-versatile",
+                response_format: { type: "json_object" },
+            });
+            const text = completion.choices[0]?.message?.content || "{}";
+            const cleanText = text.replace(/```json\n|\n```/g, "").trim();
+            return JSON.parse(cleanText);
         });
         // Store the analysis
         await step.run("store-analysis", async () => {
@@ -205,9 +227,8 @@ exports.generateActivityRecommendations = client_1.inngest.createFunction({ id: 
                 preferences: event.data.preferences,
             };
         });
-        // Generate recommendations using Gemini
+        // Generate recommendations using Groq
         const recommendations = await step.run("generate-recommendations", async () => {
-            const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
             const prompt = `Based on the following user context, generate personalized activity recommendations:
         User Context: ${JSON.stringify(userContext)}
         
@@ -218,11 +239,28 @@ exports.generateActivityRecommendations = client_1.inngest.createFunction({ id: 
         4. Difficulty level
         5. Estimated duration
         
-        Format the response as a JSON object.`;
-            const result = await model.generateContent(prompt);
-            const response = await result.response;
-            const text = response.text();
-            return JSON.parse(text);
+        Format the response as a JSON object.
+        
+        Required JSON structure:
+        {
+          "recommendations": [
+            {
+              "name": "string",
+              "reason": "string",
+              "benefits": "string",
+              "difficulty": "string",
+              "duration": "string"
+            }
+          ]
+        }`;
+            const completion = await openai.chat.completions.create({
+                messages: [{ role: "user", content: prompt }],
+                model: "llama-3.3-70b-versatile",
+                response_format: { type: "json_object" },
+            });
+            const text = completion.choices[0]?.message?.content || "{}";
+            const cleanText = text.replace(/```json\n|\n```/g, "").trim();
+            return JSON.parse(cleanText);
         });
         // Store the recommendations
         await step.run("store-recommendations", async () => {
